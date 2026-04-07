@@ -1,0 +1,53 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { callAI, extractJsonObject, cleanJsonString } from '@/lib/ai/providers';
+import { buildStepsPrompt } from '@/lib/ai/prompts';
+import type { AncestorContext, CompatType, Feasibility } from '@/lib/types';
+
+export async function POST(req: NextRequest) {
+  try {
+    const {
+      goalText,
+      clarifications,
+      stepClarifications,
+      feasibility,
+      parentContext,
+      adjustmentInstruction,
+      currentSteps,
+      compatType,
+      baseURL,
+      apiKey,
+      model,
+    } = await req.json();
+
+    if (!apiKey) {
+      return NextResponse.json({ error: 'API key not configured / API Key 未配置' }, { status: 400 });
+    }
+
+    const prompt = buildStepsPrompt(
+      goalText,
+      clarifications || [],
+      feasibility as Feasibility | null,
+      (parentContext as AncestorContext[] | null) || null,
+      adjustmentInstruction || null,
+      currentSteps || null,
+      stepClarifications || null,
+    );
+
+    const text = await callAI(
+      { compatType: compatType as CompatType, baseURL, apiKey, model, temperature: 0.6 },
+      prompt
+    );
+
+    const extracted = extractJsonObject(text);
+    if (!extracted) {
+      return NextResponse.json({ error: 'Failed to parse AI response' }, { status: 500 });
+    }
+
+    const parsed = JSON.parse(cleanJsonString(extracted));
+    return NextResponse.json(parsed);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    console.error('[/api/ai/steps] Error:', message);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

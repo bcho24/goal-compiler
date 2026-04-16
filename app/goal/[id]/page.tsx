@@ -2,23 +2,25 @@
 
 import { useEffect, useState, useCallback, use } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Play } from 'lucide-react';
+import { ArrowLeft, Play, MessageCircle, X } from 'lucide-react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Header } from '@/components/layout/Header';
 import { PhaseIndicator } from '@/components/goal/PhaseIndicator';
 import { GoalInput } from '@/components/goal/GoalInput';
-import { ClarifyPanel } from '@/components/goal/ClarifyPanel';
-import { GoalReviewPanel } from '@/components/goal/GoalReviewPanel';
+import { GoalUnderstandingPanel } from '@/components/goal/GoalUnderstandingPanel';
+import { ClarifyQuestions } from '@/components/goal/ClarifyQuestions';
 import { FeasibilityPanel } from '@/components/goal/FeasibilityPanel';
 import { StepsPanel } from '@/components/goal/StepsPanel';
+import { FreeChatPanel } from '@/components/goal/FreeChatPanel';
 import { GoalBreadcrumb } from '@/components/goal/GoalBreadcrumb';
 import { useGoalStore } from '@/lib/store/goalStore';
 import { useSettingsStore } from '@/lib/store/settingsStore';
+import { useChatStore } from '@/lib/store/chatStore';
 import { useI18n } from '@/lib/i18n';
 import { getPhaseNumber } from '@/lib/stateMachine';
-import type { ClarifyQuestion, Step, StepGroup, Feasibility, GoalAdjustment, AncestorContext, StepType } from '@/lib/types';
+import type { Feasibility, Step, StepGroup, StepClarification, AncestorContext, StepType, ClarifyQuestion } from '@/lib/types';
 import { db } from '@/lib/db';
 import { toast } from 'sonner';
 
@@ -31,7 +33,6 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
     currentGoal,
     clarifications,
     feasibility,
-    goalAdjustments,
     steps,
     stepGroups,
     stepClarification,
@@ -39,6 +40,7 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
     loadGoal,
     updateGoalState,
     updateGoalText,
+    updateAiUnderstanding,
     addClarification,
     updateClarification,
     setFeasibility,
@@ -57,11 +59,13 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
   } = useGoalStore();
 
   const { initConfig, isConfigured } = useSettingsStore();
+  const { clearMessages } = useChatStore();
 
   const [childStepCounts, setChildStepCounts] = useState<Record<string, number>>({});
   const [ancestorChain, setAncestorChain] = useState<AncestorContext[]>([]);
   const [ancestorChainReady, setAncestorChainReady] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [showRightPanel, setShowRightPanel] = useState(true);
 
   useEffect(() => {
     initConfig();
@@ -69,7 +73,8 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
 
   useEffect(() => {
     loadGoal(id);
-  }, [id, loadGoal]);
+    clearMessages();
+  }, [id, loadGoal, clearMessages]);
 
   useEffect(() => {
     async function fetchChildCounts() {
@@ -112,6 +117,7 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
     buildAncestorChain();
   }, [currentGoal?.parentStepId]);
 
+  // V2.1 main flow: submit goal -> AI_UNDERSTANDING -> GOAL_CLARIFYING
   const handleGoalSubmit = useCallback(async (text: string) => {
     if (!currentGoal) return;
     if (!isConfigured()) {
@@ -122,100 +128,50 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
     setSubmitting(true);
     try {
       await updateGoalText(currentGoal.id, text);
-      const config = useSettingsStore.getState().config;
-      const res = await fetch('/api/ai/clarify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          goalText: text,
-          existingQA: [],
-          compatType: config.compatType,
-          baseURL: config.baseURL,
-          apiKey: config.apiKey,
-          model: config.model,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Request failed');
-      }
-      const data = await res.json();
-      if (data.isGoalClear) {
-        const summary = data.goalSummary || text;
-        await updateGoalText(currentGoal.id, summary);
-        await updateGoalState(currentGoal.id, 'GENERATING_STEPS');
-      } else {
-        await addClarification(currentGoal.id, {
-          goalId: currentGoal.id,
-          round: 1,
-          questions: data.questions,
-          status: 'pending',
-        });
-        await updateGoalState(currentGoal.id, 'CLARIFYING_GOAL');
-      }
+      await updateGoalState(currentGoal.id, 'AI_UNDERSTANDING');
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       toast.error(t('common.aiRequestFailed', { msg: message }));
     } finally {
       setSubmitting(false);
     }
-  }, [currentGoal, isConfigured, router, updateGoalText, updateGoalState, addClarification, t]);
+  }, [currentGoal, isConfigured, router, updateGoalText, updateGoalState, t]);
 
-  const handleNewQuestions = useCallback(async (questions: ClarifyQuestion[]) => {
+  // Called by GoalUnderstandingPanel when AI generates understanding
+  const handleUnderstandingGenerated = useCallback(async (understanding: string) => {
     if (!currentGoal) return;
-    const round = clarifications.length + 1;
-    await addClarification(currentGoal.id, {
-      goalId: currentGoal.id,
-      round,
-      questions,
-      status: 'pending',
-    });
-  }, [currentGoal, clarifications, addClarification]);
+    await updateAiUnderstanding(currentGoal.id, understanding);
+    await updateGoalState(currentGoal.id, 'GOAL_CLARIFYING');
+  }, [currentGoal, updateAiUnderstanding, updateGoalState]);
 
-  const handleSubmitAnswers = useCallback(async (answers: Record<string, string>) => {
+  const handleUnderstandingUpdated = useCallback(async (understanding: string) => {
     if (!currentGoal) return;
-    const pending = clarifications.find((c) => c.status === 'pending');
-    if (!pending) return;
-    const updated = pending.questions.map((q) => ({ ...q, answer: answers[q.id] || '' }));
-    await updateClarification(pending.id, { questions: updated, status: 'answered' });
-  }, [currentGoal, clarifications, updateClarification]);
+    await updateAiUnderstanding(currentGoal.id, understanding);
+  }, [currentGoal, updateAiUnderstanding]);
 
-  const handleEditRoundAnswers = useCallback(async (roundId: string, answers: Record<string, string>) => {
-    const round = clarifications.find((c) => c.id === roundId);
-    if (!round) return;
-    const updated = round.questions.map((q) => ({ ...q, answer: answers[q.id] || '' }));
-    await updateClarification(roundId, { questions: updated });
-  }, [clarifications, updateClarification]);
-
-  const handleClarificationComplete = useCallback(async (summary: string) => {
-    if (!currentGoal) return;
-    await updateGoalText(currentGoal.id, summary);
-    await updateGoalState(currentGoal.id, 'GOAL_CLEAR');
-    setTimeout(async () => {
-      await updateGoalState(currentGoal.id, 'GOAL_REVIEW');
-    }, 300);
-  }, [currentGoal, updateGoalText, updateGoalState]);
-
-  const handleGoalReviewConfirm = useCallback(async () => {
+  // Called when user confirms goal understanding -> proceed to feasibility
+  const handleConfirmGoal = useCallback(async () => {
     if (!currentGoal) return;
     await updateGoalState(currentGoal.id, 'FEASIBILITY_CHECK');
   }, [currentGoal, updateGoalState]);
 
-  const handleAdjustStateStart = useCallback(async () => {
-    if (!currentGoal) return;
-    await updateGoalState(currentGoal.id, 'ADJUSTING_GOAL');
-  }, [currentGoal, updateGoalState]);
-
-  const handleGoalUpdated = useCallback(async (updatedText: string, _summary: string) => {
-    if (!currentGoal) return;
-    await updateGoalText(currentGoal.id, updatedText);
-    await updateGoalState(currentGoal.id, 'GOAL_REVIEW');
-  }, [currentGoal, updateGoalText, updateGoalState]);
-
-  const handleAddAdjustment = useCallback(async (data: Omit<GoalAdjustment, 'id'>) => {
-    if (!currentGoal) return { id: '', goalId: '', round: 0, userRequest: '', questions: [], status: 'clarifying' as const };
-    return addGoalAdjustment({ ...data, goalId: currentGoal.id });
-  }, [currentGoal, addGoalAdjustment]);
+  // Called when ClarifyQuestions submits answers -> update understanding
+  const handleClarifyAnswers = useCallback(async (qa: { question: string; answer: string }[]) => {
+    if (!currentGoal || qa.length === 0) return;
+    // Add as a clarification record
+    const round = clarifications.length + 1;
+    await addClarification(currentGoal.id, {
+      goalId: currentGoal.id,
+      round,
+      questions: qa.map((item, i) => ({
+        id: `q${i + 1}`,
+        question: item.question,
+        type: 'text' as const,
+        answer: item.answer,
+      })),
+      status: 'answered',
+    });
+  }, [currentGoal, clarifications, addClarification]);
 
   const handleFeasibilityGenerated = useCallback(async (data: Omit<Feasibility, 'id' | 'goalId' | 'userConfirmed'>) => {
     if (!currentGoal) return;
@@ -333,7 +289,7 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
     return (
       <div className="min-h-screen bg-background">
         <Header />
-        <main className="mx-auto max-w-3xl px-4 py-8">
+        <main className="mx-auto max-w-5xl px-4 py-8">
           <div className="animate-pulse space-y-4">
             <div className="h-4 w-32 bg-muted rounded" />
             <div className="h-8 w-64 bg-muted rounded" />
@@ -345,17 +301,26 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
   }
 
   const phase = getPhaseNumber(currentGoal.currentState);
+  const isClarifyingPhase = phase === 2;
 
+  // Build QA list from clarifications for downstream use
   const allQA = clarifications
     .filter((c) => c.status === 'answered')
     .flatMap((c) => c.questions.filter((q) => q.answer).map((q) => ({ question: q.question, answer: q.answer! })));
 
+  // Determine if understanding is confirmed (moved past GOAL_CLARIFYING)
+  const isUnderstandingConfirmed = phase > 2;
+
+  // Determine if goal text display should show (when past input phase)
+  const showGoalTextBanner = phase > 1 && currentGoal.currentState !== 'VAGUE_GOAL' && currentGoal.currentState !== 'AI_UNDERSTANDING';
+
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background flex flex-col">
       <Header />
-      <main className="mx-auto max-w-3xl px-4 py-6">
+      <main className="flex-1 mx-auto w-full max-w-6xl px-4 py-6">
         <GoalBreadcrumb goalId={currentGoal.id} />
 
+        {/* Page header */}
         <div className="flex items-center gap-3 mb-4">
           <Link href={currentGoal.parentStepId ? '#' : '/'}>
             <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => router.back()}>
@@ -371,114 +336,175 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
               <span className="text-xs text-muted-foreground">v{currentGoal.version}</span>
             </div>
           </div>
+          {/* Toggle right panel button - only shown during clarifying phase */}
+          {isClarifyingPhase && (
+            <Button
+              variant={showRightPanel ? 'secondary' : 'outline'}
+              size="sm"
+              className="gap-1.5 text-xs shrink-0"
+              onClick={() => setShowRightPanel(!showRightPanel)}
+            >
+              <MessageCircle className="h-3.5 w-3.5" />
+              {showRightPanel ? '收起提问' : '自由提问'}
+            </Button>
+          )}
         </div>
 
         <PhaseIndicator currentState={currentGoal.currentState} />
 
-        <div className="space-y-4 mt-6">
-          {currentGoal.currentState === 'VAGUE_GOAL' && (
-            <GoalInput
-              initialText={currentGoal.goalText}
-              onSubmit={handleGoalSubmit}
-              isModifying={currentGoal.version > 1}
-              isLoading={submitting}
-            />
-          )}
+        {/* Dual-panel layout */}
+        <div className={`mt-6 flex gap-4 ${isClarifyingPhase && showRightPanel ? 'items-start' : ''}`}>
+          {/* Left side: main flow */}
+          <div className={`flex-1 min-w-0 space-y-4 ${isClarifyingPhase && showRightPanel ? 'max-w-[60%]' : 'w-full'}`}>
+            {/* Phase 1: Goal input */}
+            {currentGoal.currentState === 'VAGUE_GOAL' && (
+              <GoalInput
+                initialText={currentGoal.goalText}
+                onSubmit={handleGoalSubmit}
+                isModifying={currentGoal.version > 1}
+                isLoading={submitting}
+              />
+            )}
 
-          {phase > 1 && currentGoal.currentState !== 'VAGUE_GOAL' && (
-            <div className="rounded-lg border bg-muted/30 p-3">
-              <p className="text-sm">
-                <span className="font-medium text-muted-foreground">{t('goalWorkspace.goalLabel')}: </span>
-                {currentGoal.goalText}
-              </p>
-            </div>
-          )}
+            {/* Goal text banner (shown when past input phase, during clarifying) */}
+            {showGoalTextBanner && (
+              <div className="rounded-lg border bg-muted/30 p-3">
+                <p className="text-sm">
+                  <span className="font-medium text-muted-foreground">目标：</span>
+                  {currentGoal.goalText}
+                </p>
+              </div>
+            )}
 
-          {(currentGoal.currentState === 'CLARIFYING_GOAL' || clarifications.length > 0) && (
-            <ClarifyPanel
-              goalText={currentGoal.goalText}
-              clarifications={clarifications}
-              isActive={currentGoal.currentState === 'CLARIFYING_GOAL'}
-              onSubmitAnswers={handleSubmitAnswers}
-              onEditRoundAnswers={handleEditRoundAnswers}
-              onClarificationComplete={handleClarificationComplete}
-              goalId={currentGoal.id}
-              onNewQuestions={handleNewQuestions}
-            />
-          )}
+            {/* Phase 2: AI Understanding + Clarify questions (V2.1 core) */}
+            {(currentGoal.currentState === 'AI_UNDERSTANDING' || currentGoal.currentState === 'GOAL_CLARIFYING' || isUnderstandingConfirmed) && (
+              <GoalUnderstandingPanel
+                goalText={currentGoal.goalText}
+                goalId={currentGoal.id}
+                aiUnderstanding={currentGoal.aiUnderstanding}
+                isActive={currentGoal.currentState === 'AI_UNDERSTANDING' || currentGoal.currentState === 'GOAL_CLARIFYING'}
+                isConfirmed={isUnderstandingConfirmed}
+                onUnderstandingGenerated={handleUnderstandingGenerated}
+                onUnderstandingUpdated={handleUnderstandingUpdated}
+                onConfirm={handleConfirmGoal}
+              />
+            )}
 
-          {(currentGoal.currentState === 'GOAL_REVIEW' ||
-            currentGoal.currentState === 'ADJUSTING_GOAL' ||
-            goalAdjustments.length > 0 ||
-            phase >= 3) && (
-            <GoalReviewPanel
-              goalText={currentGoal.goalText}
-              clarifications={allQA}
-              goalAdjustments={goalAdjustments}
-              isActive={
-                currentGoal.currentState === 'GOAL_REVIEW' ||
-                currentGoal.currentState === 'ADJUSTING_GOAL'
-              }
-              currentState={currentGoal.currentState}
-              onConfirm={handleGoalReviewConfirm}
-              onAdjustStateStart={handleAdjustStateStart}
-              onGoalUpdated={handleGoalUpdated}
-              onAddAdjustment={handleAddAdjustment}
-              onUpdateAdjustment={updateGoalAdjustment}
-            />
-          )}
+            {/* Clarify questions - shown in GOAL_CLARIFYING only */}
+            {currentGoal.currentState === 'GOAL_CLARIFYING' && (
+              <ClarifyQuestions
+                goalText={currentGoal.goalText}
+                aiUnderstanding={currentGoal.aiUnderstanding}
+                isActive={true}
+                onAnswersSubmitted={handleClarifyAnswers}
+              />
+            )}
 
-          {(feasibility != null || currentGoal.currentState === 'FEASIBILITY_CHECK' || currentGoal.currentState === 'GOAL_CONFIRMED') && (
-            <FeasibilityPanel
-              goalText={currentGoal.goalText}
-              clarifications={allQA}
-              feasibility={feasibility}
-              isActive={currentGoal.currentState === 'FEASIBILITY_CHECK'}
-              onFeasibilityGenerated={handleFeasibilityGenerated}
-              onConfirm={handleConfirmFeasibility}
-            />
-          )}
+            {/* Feasibility analysis */}
+            {(feasibility != null || currentGoal.currentState === 'FEASIBILITY_CHECK' || currentGoal.currentState === 'GOAL_CONFIRMED') && (
+              <FeasibilityPanel
+                goalText={currentGoal.aiUnderstanding
+                  ? (() => {
+                      try {
+                        const parsed = JSON.parse(currentGoal.aiUnderstanding);
+                        return parsed.summary || currentGoal.goalText;
+                      } catch {
+                        return currentGoal.goalText;
+                      }
+                    })()
+                  : currentGoal.goalText}
+                clarifications={allQA}
+                feasibility={feasibility}
+                isActive={currentGoal.currentState === 'FEASIBILITY_CHECK'}
+                onFeasibilityGenerated={handleFeasibilityGenerated}
+                onConfirm={handleConfirmFeasibility}
+              />
+            )}
 
-          {phase >= 4 && (
-            <StepsPanel
-              goalText={currentGoal.goalText}
-              goalState={currentGoal.currentState}
-              clarifications={allQA}
-              stepPlanningResolvedQa={stepClarification?.resolvedHistory ?? []}
-              feasibility={feasibility}
-              steps={steps}
-              stepGroups={stepGroups}
-              parentContext={ancestorChain.length > 0 ? ancestorChain : null}
-              parentContextReady={ancestorChainReady}
-              stepClarificationQuestions={stepClarification?.questions ?? null}
-              isActive={phase === 4}
-              onStepsGenerated={handleStepsGenerated}
-              onStepClarificationNeeded={handleStepClarificationNeeded}
-              onStepClarificationAnswered={handleStepClarificationAnswered}
-              onToggleStep={handleToggleStep}
-              onEditStep={handleEditStep}
-              onDeleteStep={handleDeleteStep}
-              onDrillDown={handleDrillDown}
-              onViewChild={handleViewChild}
-              onEditGroup={handleEditGroup}
-              onDeleteGroup={handleDeleteGroup}
-              onComplete={handleComplete}
-              childStepCounts={childStepCounts}
-            />
-          )}
+            {/* Steps */}
+            {phase >= 4 && (
+              <StepsPanel
+                goalText={currentGoal.aiUnderstanding
+                  ? (() => {
+                      try {
+                        const parsed = JSON.parse(currentGoal.aiUnderstanding);
+                        return `${parsed.summary}\n\n${parsed.blocks?.map((b: { title: string; content: string }) => `${b.title}: ${b.content}`).join('\n') ?? ''}`;
+                      } catch {
+                        return currentGoal.goalText;
+                      }
+                    })()
+                  : currentGoal.goalText}
+                goalState={currentGoal.currentState}
+                clarifications={allQA}
+                stepPlanningResolvedQa={stepClarification?.resolvedHistory ?? []}
+                feasibility={feasibility}
+                steps={steps}
+                stepGroups={stepGroups}
+                parentContext={ancestorChain.length > 0 ? ancestorChain : null}
+                parentContextReady={ancestorChainReady}
+                stepClarificationQuestions={stepClarification?.questions ?? null}
+                isActive={phase === 4}
+                onStepsGenerated={handleStepsGenerated}
+                onStepClarificationNeeded={handleStepClarificationNeeded}
+                onStepClarificationAnswered={handleStepClarificationAnswered}
+                onToggleStep={handleToggleStep}
+                onEditStep={handleEditStep}
+                onDeleteStep={handleDeleteStep}
+                onDrillDown={handleDrillDown}
+                onViewChild={handleViewChild}
+                onEditGroup={handleEditGroup}
+                onDeleteGroup={handleDeleteGroup}
+                onComplete={handleComplete}
+                childStepCounts={childStepCounts}
+              />
+            )}
 
-          {currentGoal.currentState === 'COMPLETED' && (
-            <div className="rounded-lg border-2 border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950 p-4 text-center">
-              <p className="font-medium text-green-700 dark:text-green-300 mb-2">
-                🎉 {t('goalWorkspace.goalCompleted')}
-              </p>
-              <p className="text-sm text-muted-foreground mb-3">
-                {t('goalWorkspace.goalCompletedHint')}
-              </p>
-              <Button variant="outline" size="sm" className="gap-1.5" onClick={handleResume}>
-                <Play className="h-3.5 w-3.5" />
-                {t('goalWorkspace.resumeEditing')}
-              </Button>
+            {/* Completed state */}
+            {currentGoal.currentState === 'COMPLETED' && (
+              <div className="rounded-lg border-2 border-green-200 dark:border-green-800 bg-green-50 dark:bg-green-950 p-4 text-center">
+                <p className="font-medium text-green-700 dark:text-green-300 mb-2">
+                  🎉 {t('goalWorkspace.goalCompleted')}
+                </p>
+                <p className="text-sm text-muted-foreground mb-3">
+                  {t('goalWorkspace.goalCompletedHint')}
+                </p>
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={handleResume}>
+                  <Play className="h-3.5 w-3.5" />
+                  {t('goalWorkspace.resumeEditing')}
+                </Button>
+              </div>
+            )}
+          </div>
+
+          {/* Right side: free chat panel (only during clarifying phase) */}
+          {isClarifyingPhase && showRightPanel && (
+            <div className="w-[40%] shrink-0 sticky top-6 h-[calc(100vh-120px)] rounded-lg border overflow-hidden flex flex-col">
+              <div className="flex items-center justify-between px-3 py-2 border-b bg-muted/30 shrink-0">
+                <div className="flex flex-col">
+                  <span className="text-sm font-medium flex items-center gap-1.5">
+                    <MessageCircle className="h-4 w-4" />
+                    自由提问区
+                  </span>
+                  <span className="text-xs text-muted-foreground mt-0.5">
+                    辅助澄清，不影响左侧主流程
+                  </span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 w-6 p-0 self-start"
+                  onClick={() => setShowRightPanel(false)}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+              <div className="flex-1 min-h-0">
+                <FreeChatPanel
+                  goalText={currentGoal.goalText}
+                  aiUnderstanding={currentGoal.aiUnderstanding}
+                  isVisible={true}
+                />
+              </div>
             </div>
           )}
         </div>

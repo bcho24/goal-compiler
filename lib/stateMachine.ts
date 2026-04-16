@@ -7,15 +7,11 @@ type Transition = {
 };
 
 const transitions: Transition[] = [
-  { from: 'VAGUE_GOAL', to: 'CLARIFYING_GOAL', trigger: 'SUBMIT_GOAL' },
-  { from: 'VAGUE_GOAL', to: 'GENERATING_STEPS', trigger: 'SIMPLE_GOAL' },
-  { from: 'CLARIFYING_GOAL', to: 'CLARIFYING_GOAL', trigger: 'CONTINUE_CLARIFY' },
-  { from: 'CLARIFYING_GOAL', to: 'GOAL_CLEAR', trigger: 'GOAL_IS_CLEAR' },
-  { from: 'GOAL_CLEAR', to: 'GOAL_REVIEW', trigger: 'SHOW_REVIEW' },
-  { from: 'GOAL_REVIEW', to: 'ADJUSTING_GOAL', trigger: 'SUBMIT_ADJUSTMENT' },
-  { from: 'ADJUSTING_GOAL', to: 'ADJUSTING_GOAL', trigger: 'CONTINUE_ADJUST' },
-  { from: 'ADJUSTING_GOAL', to: 'GOAL_REVIEW', trigger: 'GOAL_UPDATED' },
-  { from: 'GOAL_REVIEW', to: 'FEASIBILITY_CHECK', trigger: 'CONFIRM_GOAL' },
+  // V2.1 main flow
+  { from: 'VAGUE_GOAL', to: 'AI_UNDERSTANDING', trigger: 'SUBMIT_GOAL' },
+  { from: 'AI_UNDERSTANDING', to: 'GOAL_CLARIFYING', trigger: 'UNDERSTANDING_READY' },
+  { from: 'GOAL_CLARIFYING', to: 'GOAL_CLARIFYING', trigger: 'UPDATE_UNDERSTANDING' },
+  { from: 'GOAL_CLARIFYING', to: 'FEASIBILITY_CHECK', trigger: 'CONFIRM_GOAL' },
   { from: 'FEASIBILITY_CHECK', to: 'GOAL_CONFIRMED', trigger: 'CONFIRM_GOAL' },
   { from: 'GOAL_CONFIRMED', to: 'GENERATING_STEPS', trigger: 'GENERATE_STEPS' },
   { from: 'GENERATING_STEPS', to: 'CLARIFYING_STEPS', trigger: 'STEPS_NEED_CLARIFY' },
@@ -25,6 +21,22 @@ const transitions: Transition[] = [
   { from: 'STEPS_STABLE', to: 'COMPLETED', trigger: 'COMPLETE' },
   { from: 'STEPS_STABLE', to: 'GENERATING_STEPS', trigger: 'REGENERATE_STEPS' },
   { from: 'COMPLETED', to: 'STEPS_STABLE', trigger: 'RESUME_EDIT' },
+
+  // V1 legacy transitions (for backward compatibility with existing DB records)
+  { from: 'VAGUE_GOAL', to: 'CLARIFYING_GOAL', trigger: 'SUBMIT_GOAL_LEGACY' },
+  { from: 'VAGUE_GOAL', to: 'GENERATING_STEPS', trigger: 'SIMPLE_GOAL' },
+  { from: 'CLARIFYING_GOAL', to: 'CLARIFYING_GOAL', trigger: 'CONTINUE_CLARIFY' },
+  { from: 'CLARIFYING_GOAL', to: 'GOAL_CLEAR', trigger: 'GOAL_IS_CLEAR' },
+  { from: 'GOAL_CLEAR', to: 'GOAL_REVIEW', trigger: 'SHOW_REVIEW' },
+  { from: 'GOAL_REVIEW', to: 'ADJUSTING_GOAL', trigger: 'SUBMIT_ADJUSTMENT' },
+  { from: 'ADJUSTING_GOAL', to: 'ADJUSTING_GOAL', trigger: 'CONTINUE_ADJUST' },
+  { from: 'ADJUSTING_GOAL', to: 'GOAL_REVIEW', trigger: 'GOAL_UPDATED' },
+  { from: 'GOAL_REVIEW', to: 'FEASIBILITY_CHECK', trigger: 'CONFIRM_GOAL_LEGACY' },
+  // Allow legacy states to reach feasibility check
+  { from: 'CLARIFYING_GOAL', to: 'FEASIBILITY_CHECK', trigger: 'CONFIRM_GOAL' },
+  { from: 'GOAL_CLEAR', to: 'FEASIBILITY_CHECK', trigger: 'CONFIRM_GOAL' },
+  { from: 'GOAL_REVIEW', to: 'FEASIBILITY_CHECK', trigger: 'CONFIRM_GOAL' },
+  { from: 'ADJUSTING_GOAL', to: 'FEASIBILITY_CHECK', trigger: 'CONFIRM_GOAL' },
 ];
 
 export function canTransition(from: GoalState, to: GoalState): boolean {
@@ -39,6 +51,9 @@ export function getPhaseNumber(state: GoalState): number {
   switch (state) {
     case 'VAGUE_GOAL':
       return 1;
+    case 'AI_UNDERSTANDING':
+    case 'GOAL_CLARIFYING':
+    // V1 legacy
     case 'CLARIFYING_GOAL':
     case 'GOAL_CLEAR':
     case 'GOAL_REVIEW':

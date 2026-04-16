@@ -1,5 +1,78 @@
 import type { ClarifyQuestion, Feasibility } from '@/lib/types';
 
+export function buildUnderstandPrompt(goalText: string, previousUnderstanding?: string | null, userNote?: string | null): string {
+  const context = previousUnderstanding
+    ? `\n\nPrevious understanding (user may have edited it):\n${previousUnderstanding}`
+    : '';
+  const note = userNote
+    ? `\n\nUser's additional note or edit: "${userNote}"`
+    : '';
+
+  return `You are an expert goal analyst. Your job is to help a user clarify and structure their goal.
+
+The user's goal: "${goalText}"${context}${note}
+
+Generate a structured understanding of this goal. This will be shown to the user so they can review and edit it.
+
+Requirements:
+- Write a short summary paragraph first (2-3 sentences max)
+- Then write several structured blocks, each with a title and content
+- Keep it concise and readable - the user will edit this
+- Do NOT ask questions in this response - just show your understanding
+- Use the same language as the user's goal
+- Suggested block titles (adapt as needed): Current Goal, Current Focus, Known Context, Key Constraints, Open Questions
+- "Open Questions" block should list things that are unclear or missing - keep it brief
+
+Output ONLY valid JSON:
+{
+  "summary": "Short summary of the goal (2-3 sentences)",
+  "blocks": [
+    { "title": "Block title", "content": "Block content" }
+  ]
+}`;
+}
+
+export function buildClarifyQuestionsPrompt(goalText: string, understanding: string, existingQA: { question: string; answer: string }[]): string {
+  const qaHistory = existingQA.length > 0
+    ? `\n\nQuestions already asked and answered:\n${existingQA.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
+    : '';
+
+  return `You are an expert goal clarification assistant. The user has a goal and we have already generated a structured understanding of it.
+
+User's goal: "${goalText}"
+
+Current structured understanding:
+${understanding}${qaHistory}
+
+Your task: Identify the most critical ambiguities that MUST be resolved before we can generate a reliable high-level plan.
+
+Rules:
+- Only ask about things that would CHANGE the implementation path, affect solution choice, or impact cost/time/feasibility
+- Do NOT ask about execution details or things that can be figured out later
+- Ask at most 2-3 questions total - fewer is better
+- If the goal is already clear enough for high-level planning, return empty questions array
+- Questions should be in the same language as the user's goal
+
+Respond in this exact JSON format:
+{
+  "questions": [
+    {
+      "id": "q1",
+      "question": "string",
+      "type": "text" | "select" | "multi_select",
+      "options": ["option1", "option2"]
+    }
+  ]
+}
+
+Question type guide:
+- "text": open-ended answer
+- "select": exactly ONE option
+- "multi_select": MULTIPLE options can apply
+
+If no critical ambiguities exist, return { "questions": [] }`;
+}
+
 export function buildClarifyPrompt(goalText: string, existingQA: { question: string; answer: string }[]): string {
   const qaHistory = existingQA.length > 0
     ? `\n\nPrevious Q&A:\n${existingQA.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
@@ -97,9 +170,12 @@ ${qaText}${stepQaText}
 ${feasibility ? `\nFeasibility: ${feasibility.summary}\nAssumptions: ${feasibility.assumptions.join(', ')}` : ''}${adjustmentInfo}
 
 Rules:
-- Generate as few or as many steps as needed based on complexity.
+- First, assess if this is a SIMPLE or COMPLEX goal.
+- SIMPLE goal: 1-5 clear, directly executable steps. Output each step in detail.
+- COMPLEX goal: Output only a HIGH-LEVEL SKELETON of 3-7 major phases/milestones. Mark complex sub-goals with "isComplexSubGoal: true" - these can be recursively planned later. Do NOT expand complex sub-goals in detail.
 - Each step should be a logical, necessary milestone. Use the same language as the goal.
 - If anything is uncertain, mark it with "[Assumption: ...]" in the description.
+- Prioritize reliability over completeness - it is better to have fewer, solid steps than many uncertain ones.
 
 Step fields:
 - "type": "research" | "decision" | "action" | "creation"
@@ -107,6 +183,7 @@ Step fields:
 - "blocked_by": array of step order numbers (integers) within the SAME group. Use [] if no intra-group dependency.
 - "reason_if_not_executable": brief explanation when executable is false.
 - "tool_hint": suggested tool when executable is true (e.g. "web_search", "code_generation").
+- "isComplexSubGoal": true if this step is itself a complex sub-goal that warrants its own planning session.
 
 Grouping:
 - For simple goals (2-4 linear steps), set "groups" to [] and omit "group" from steps.
@@ -122,7 +199,7 @@ CRITICAL: Output ONLY valid JSON.
     { "id": "group_id", "title": "Group title", "description": "...", "order": 0, "blocked_by": [] }
   ],
   "steps": [
-    { "order": 0, "title": "Step title", "description": "...", "type": "action", "executable": true, "blocked_by": [], "reason_if_not_executable": "", "tool_hint": "", "group": "group_id" }
+    { "order": 0, "title": "Step title", "description": "...", "type": "action", "executable": true, "blocked_by": [], "reason_if_not_executable": "", "tool_hint": "", "group": "group_id", "isComplexSubGoal": false }
   ]
 }`;
 }
@@ -204,5 +281,11 @@ export type StepsResponse = {
     reason_if_not_executable?: string;
     tool_hint?: string;
     group?: string;
+    isComplexSubGoal?: boolean;
   }[];
+};
+
+export type UnderstandResponse = {
+  summary: string;
+  blocks: { title: string; content: string }[];
 };

@@ -52,4 +52,18 @@ db.version(4).stores({
   });
 });
 
+db.version(5).stores({
+  goals: 'id, parentStepId, currentState, updatedAt',
+  clarifications: 'id, goalId, round',
+  feasibilities: 'id, goalId',
+  goalAdjustments: 'id, goalId, round',
+  steps: 'id, goalId, order, type, executable, group',
+  stepGroups: 'id, goalId, order',
+  stepClarifications: 'id, goalId',
+}).upgrade((tx) => {
+  return tx.table('goals').toCollection().modify((goal) => {
+    if (goal.aiUnderstanding === undefined) goal.aiUnderstanding = null;
+  });
+});
+
 export { db };

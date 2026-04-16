@@ -1,15 +1,18 @@
 export type GoalState =
   | 'VAGUE_GOAL'
-  | 'CLARIFYING_GOAL'
-  | 'GOAL_CLEAR'
-  | 'GOAL_REVIEW'
-  | 'ADJUSTING_GOAL'
+  | 'AI_UNDERSTANDING'
+  | 'GOAL_CLARIFYING'
   | 'FEASIBILITY_CHECK'
   | 'GOAL_CONFIRMED'
   | 'GENERATING_STEPS'
   | 'CLARIFYING_STEPS'
   | 'STEPS_STABLE'
-  | 'COMPLETED';
+  | 'COMPLETED'
+  // V1 legacy states (kept for DB compatibility, no longer used in V2.1 flow)
+  | 'CLARIFYING_GOAL'
+  | 'GOAL_CLEAR'
+  | 'GOAL_REVIEW'
+  | 'ADJUSTING_GOAL';
 
 export type StepStatus = 'pending' | 'in_progress' | 'completed';
 
@@ -30,6 +33,7 @@ export interface Goal {
   goalText: string;
   currentState: GoalState;
   version: number;
+  aiUnderstanding: string | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -92,6 +96,7 @@ export interface Step {
   reason_if_not_executable?: string;
   tool_hint?: string;
   group?: string;
+  isComplexSubGoal?: boolean;
 }
 
 export interface AncestorContext {

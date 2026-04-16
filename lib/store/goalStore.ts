@@ -20,6 +20,7 @@ interface GoalStore {
   createGoal: (goalText: string, parentStepId?: string | null) => Promise<Goal>;
   updateGoalState: (goalId: string, newState: GoalState) => Promise<void>;
   updateGoalText: (goalId: string, text: string, title?: string) => Promise<void>;
+  updateAiUnderstanding: (goalId: string, understanding: string) => Promise<void>;
   deleteGoal: (goalId: string) => Promise<void>;
 
   addClarification: (goalId: string, clarification: Omit<Clarification, 'id'>) => Promise<Clarification>;
@@ -86,6 +87,7 @@ export const useGoalStore = create<GoalStore>((set, get) => ({
       goalText,
       currentState: 'VAGUE_GOAL',
       version: 1,
+      aiUnderstanding: null,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -119,6 +121,17 @@ export const useGoalStore = create<GoalStore>((set, get) => ({
       version: goal.version + 1,
       updatedAt: Date.now(),
     };
+    await db.goals.put(updated);
+    set((s) => ({
+      currentGoal: s.currentGoal?.id === goalId ? updated : s.currentGoal,
+      goals: s.goals.map((g) => (g.id === goalId ? updated : g)),
+    }));
+  },
+
+  updateAiUnderstanding: async (goalId: string, understanding: string) => {
+    const goal = await db.goals.get(goalId);
+    if (!goal) return;
+    const updated = { ...goal, aiUnderstanding: understanding, updatedAt: Date.now() };
     await db.goals.put(updated);
     set((s) => ({
       currentGoal: s.currentGoal?.id === goalId ? updated : s.currentGoal,
@@ -238,6 +251,7 @@ export const useGoalStore = create<GoalStore>((set, get) => ({
       type: s.type ?? 'action' as const,
       executable: s.executable ?? false,
       blocked_by: s.blocked_by ?? [],
+      isComplexSubGoal: (s as { isComplexSubGoal?: boolean }).isComplexSubGoal ?? false,
       group: s.group ? (aiGroupIdToUuid.get(s.group) ?? s.group) : s.group,
     }));
 

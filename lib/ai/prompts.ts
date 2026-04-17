@@ -1,18 +1,26 @@
 import type { ClarifyQuestion, Feasibility } from '@/lib/types';
 
-export function buildUnderstandPrompt(goalText: string, previousUnderstanding?: string | null, userNote?: string | null): string {
+export function buildUnderstandPrompt(
+  goalText: string,
+  previousUnderstanding?: string | null,
+  userNote?: string | null,
+  accumulatedQA?: { question: string; answer: string }[]
+): string {
   const context = previousUnderstanding
     ? `\n\nPrevious understanding (user may have edited it):\n${previousUnderstanding}`
     : '';
   const note = userNote
     ? `\n\nUser's additional note or edit: "${userNote}"`
     : '';
+  const qaContext = accumulatedQA && accumulatedQA.length > 0
+    ? `\n\nClarification Q&A already gathered:\n${accumulatedQA.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
+    : '';
 
   return `You are an expert goal analyst. Your job is to help a user clarify and structure their goal.
 
-The user's goal: "${goalText}"${context}${note}
+The user's goal: "${goalText}"${context}${qaContext}${note}
 
-Generate a structured understanding of this goal. This will be shown to the user so they can review and edit it.
+Generate an updated structured understanding of this goal, incorporating all context above. This will be shown to the user so they can review and edit it.
 
 Requirements:
 - Write a short summary paragraph first (2-3 sentences max)
@@ -22,6 +30,7 @@ Requirements:
 - Use the same language as the user's goal
 - Suggested block titles (adapt as needed): Current Goal, Current Focus, Known Context, Key Constraints, Open Questions
 - "Open Questions" block should list things that are unclear or missing - keep it brief
+- If clarification Q&A was provided, incorporate those answers into the relevant blocks (remove the answered items from "Open Questions")
 
 Output ONLY valid JSON:
 {

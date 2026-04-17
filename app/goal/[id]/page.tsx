@@ -41,7 +41,6 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
     updateGoalState,
     updateGoalText,
     updateAiUnderstanding,
-    addClarification,
     updateClarification,
     setFeasibility,
     confirmFeasibility,
@@ -154,24 +153,6 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
     if (!currentGoal) return;
     await updateGoalState(currentGoal.id, 'FEASIBILITY_CHECK');
   }, [currentGoal, updateGoalState]);
-
-  // Called when ClarifyQuestions submits answers -> update understanding
-  const handleClarifyAnswers = useCallback(async (qa: { question: string; answer: string }[]) => {
-    if (!currentGoal || qa.length === 0) return;
-    // Add as a clarification record
-    const round = clarifications.length + 1;
-    await addClarification(currentGoal.id, {
-      goalId: currentGoal.id,
-      round,
-      questions: qa.map((item, i) => ({
-        id: `q${i + 1}`,
-        question: item.question,
-        type: 'text' as const,
-        answer: item.answer,
-      })),
-      status: 'answered',
-    });
-  }, [currentGoal, clarifications, addClarification]);
 
   const handleFeasibilityGenerated = useCallback(async (data: Omit<Feasibility, 'id' | 'goalId' | 'userConfirmed'>) => {
     if (!currentGoal) return;
@@ -396,7 +377,8 @@ export default function GoalPage({ params }: { params: Promise<{ id: string }> }
                 goalText={currentGoal.goalText}
                 aiUnderstanding={currentGoal.aiUnderstanding}
                 isActive={true}
-                onAnswersSubmitted={handleClarifyAnswers}
+                onUnderstandingUpdated={handleUnderstandingUpdated}
+                onSkip={handleConfirmGoal}
               />
             )}
 

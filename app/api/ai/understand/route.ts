@@ -5,13 +5,13 @@ import type { CompatType } from '@/lib/types';
 
 export async function POST(req: NextRequest) {
   try {
-    const { goalText, previousUnderstanding, userNote, compatType, baseURL, apiKey, model } = await req.json();
+    const { goalText, previousUnderstanding, userNote, accumulatedQA, compatType, baseURL, apiKey, model } = await req.json();
 
     if (!apiKey) {
       return NextResponse.json({ error: 'API key not configured / API Key 未配置' }, { status: 400 });
     }
 
-    const prompt = buildUnderstandPrompt(goalText, previousUnderstanding, userNote);
+    const prompt = buildUnderstandPrompt(goalText, previousUnderstanding, userNote, accumulatedQA);
 
     const text = await callAI(
       { compatType: compatType as CompatType, baseURL, apiKey, model, temperature: 0.7 },

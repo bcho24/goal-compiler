@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowLeft, Eye, EyeOff, Save, Check, Globe, Cpu, Key } from 'lucide-react';
+import { ArrowLeft, Eye, EyeOff, Save, Check, Globe, Cpu, Key, Zap } from 'lucide-react';
+import { Switch } from '@/components/ui/switch';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -155,6 +156,31 @@ export default function SettingsPage() {
             </Button>
           </CardContent>
         </Card>
+
+        {config.compatType === 'anthropic' && (
+          <Card className="mt-4">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Zap className="h-4 w-4" />
+                Anthropic 高级选项
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label className="text-sm font-medium">启用 Prompt Caching</Label>
+                  <p className="text-xs text-muted-foreground">
+                    将静态 prompt 内容标记为可缓存，可将 TTFT 降低最多 80%。仅限官方 Anthropic API，第三方转发端点不支持。
+                  </p>
+                </div>
+                <Switch
+                  checked={config.enablePromptCaching ?? false}
+                  onCheckedChange={(checked) => updateConfig({ enablePromptCaching: checked })}
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
       </main>
     </div>

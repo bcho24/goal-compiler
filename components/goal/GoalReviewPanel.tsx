@@ -71,6 +71,7 @@ export function GoalReviewPanel({
         baseURL: config.baseURL,
         apiKey: config.apiKey,
         model: config.model,
+          enablePromptCaching: config.enablePromptCaching,
       }),
     });
     if (!res.ok) {

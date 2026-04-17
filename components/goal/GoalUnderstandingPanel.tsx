@@ -7,6 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { useSettingsStore } from '@/lib/store/settingsStore';
 import { toast } from 'sonner';
+import { readStreamingJson } from '@/lib/ai/streamJson';
+import type { UnderstandResponse } from '@/lib/ai/prompts';
 
 interface UnderstandingBlock {
   title: string;
@@ -77,6 +79,7 @@ export function GoalUnderstandingPanel({
           baseURL: config.baseURL,
           apiKey: config.apiKey,
           model: config.model,
+          enablePromptCaching: config.enablePromptCaching,
         }),
       });
 
@@ -85,9 +88,22 @@ export function GoalUnderstandingPanel({
         throw new Error(err.error || 'Request failed');
       }
 
-      const data = await res.json();
-      const understandingStr = JSON.stringify(data);
+      // Stream the JSON response and update UI incrementally
+      const data = await readStreamingJson<UnderstandResponse>(res, (partial) => {
+        if (partial.summary || partial.blocks?.length) {
+          const partialStr = JSON.stringify({
+            summary: partial.summary ?? '',
+            blocks: partial.blocks ?? [],
+          });
+          if (previousUnderstanding) {
+            onUnderstandingUpdated(partialStr);
+          } else {
+            onUnderstandingGenerated(partialStr);
+          }
+        }
+      });
 
+      const understandingStr = JSON.stringify(data);
       if (previousUnderstanding) {
         onUnderstandingUpdated(understandingStr);
       } else {

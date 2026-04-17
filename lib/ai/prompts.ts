@@ -1,85 +1,55 @@
 import type { ClarifyQuestion, Feasibility } from '@/lib/types';
 
+// Shared rules injected into every prompt
+const GLOBAL_RULES = `Rules: respond in the same language as the user's goal. Output ONLY valid JSON — no markdown fences, no prose before or after.`;
+
+const QUESTION_TYPE_GUIDE = `Question types: "text"=open answer, "select"=pick ONE option, "multi_select"=pick MULTIPLE options. Always include "options" for select/multi_select.`;
+
 export function buildUnderstandPrompt(
   goalText: string,
   previousUnderstanding?: string | null,
   userNote?: string | null,
-  accumulatedQA?: { question: string; answer: string }[]
+  latestRoundQA?: { question: string; answer: string }[]
 ): string {
   const context = previousUnderstanding
-    ? `\n\nPrevious understanding (user may have edited it):\n${previousUnderstanding}`
+    ? `\n\nPrevious understanding (may be user-edited):\n${previousUnderstanding}`
     : '';
-  const note = userNote
-    ? `\n\nUser's additional note or edit: "${userNote}"`
-    : '';
-  const qaContext = accumulatedQA && accumulatedQA.length > 0
-    ? `\n\nClarification Q&A already gathered:\n${accumulatedQA.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
+  const note = userNote ? `\n\nUser note: "${userNote}"` : '';
+  const qaContext = latestRoundQA && latestRoundQA.length > 0
+    ? `\n\nNew answers to incorporate:\n${latestRoundQA.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
     : '';
 
-  return `You are an expert goal analyst. Your job is to help a user clarify and structure their goal.
+  return `Role: Goal analyst. ${GLOBAL_RULES}
 
-The user's goal: "${goalText}"${context}${qaContext}${note}
+Goal: "${goalText}"${context}${qaContext}${note}
 
-Generate an updated structured understanding of this goal, incorporating all context above. This will be shown to the user so they can review and edit it.
+Generate a structured understanding incorporating all context above. Keep it concise — the user will edit it.
+- Write a 2-3 sentence summary first.
+- Add blocks with a title and content. Suggested titles: Current Goal, Current Focus, Known Context, Key Constraints, Open Questions.
+- "Open Questions" lists unclear/missing info briefly. If QA was provided, fold answers into relevant blocks and remove resolved items from Open Questions.
+- Do NOT ask questions in this response.
 
-Requirements:
-- Write a short summary paragraph first (2-3 sentences max)
-- Then write several structured blocks, each with a title and content
-- Keep it concise and readable - the user will edit this
-- Do NOT ask questions in this response - just show your understanding
-- Use the same language as the user's goal
-- Suggested block titles (adapt as needed): Current Goal, Current Focus, Known Context, Key Constraints, Open Questions
-- "Open Questions" block should list things that are unclear or missing - keep it brief
-- If clarification Q&A was provided, incorporate those answers into the relevant blocks (remove the answered items from "Open Questions")
-
-Output ONLY valid JSON:
-{
-  "summary": "Short summary of the goal (2-3 sentences)",
-  "blocks": [
-    { "title": "Block title", "content": "Block content" }
-  ]
-}`;
+{"summary":"...","blocks":[{"title":"...","content":"..."}]}`;
 }
 
 export function buildClarifyQuestionsPrompt(goalText: string, understanding: string, existingQA: { question: string; answer: string }[]): string {
   const qaHistory = existingQA.length > 0
-    ? `\n\nQuestions already asked and answered:\n${existingQA.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
+    ? `\n\nAlready answered:\n${existingQA.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
     : '';
 
-  return `You are an expert goal clarification assistant. The user has a goal and we have already generated a structured understanding of it.
+  return `Role: Goal clarification assistant. ${GLOBAL_RULES}
 
-User's goal: "${goalText}"
+Goal: "${goalText}"
 
-Current structured understanding:
-${understanding}${qaHistory}
+Understanding:\n${understanding}${qaHistory}
 
-Your task: Identify the most critical ambiguities that MUST be resolved before we can generate a reliable high-level plan.
+Identify the most critical ambiguities that MUST be resolved before generating a reliable plan. Ask at most 2-3 questions — fewer is better. Only ask about things that change the implementation path, solution choice, or cost/time/feasibility. Skip execution details that can be decided later.
 
-Rules:
-- Only ask about things that would CHANGE the implementation path, affect solution choice, or impact cost/time/feasibility
-- Do NOT ask about execution details or things that can be figured out later
-- Ask at most 2-3 questions total - fewer is better
-- If the goal is already clear enough for high-level planning, return empty questions array
-- Questions should be in the same language as the user's goal
+${QUESTION_TYPE_GUIDE}
 
-Respond in this exact JSON format:
-{
-  "questions": [
-    {
-      "id": "q1",
-      "question": "string",
-      "type": "text" | "select" | "multi_select",
-      "options": ["option1", "option2"]
-    }
-  ]
-}
+{"questions":[{"id":"q1","question":"...","type":"text|select|multi_select","options":["..."]}]}
 
-Question type guide:
-- "text": open-ended answer
-- "select": exactly ONE option
-- "multi_select": MULTIPLE options can apply
-
-If no critical ambiguities exist, return { "questions": [] }`;
+If no critical ambiguities, return {"questions":[]}`;
 }
 
 export function buildClarifyPrompt(goalText: string, existingQA: { question: string; answer: string }[]): string {
@@ -87,59 +57,55 @@ export function buildClarifyPrompt(goalText: string, existingQA: { question: str
     ? `\n\nPrevious Q&A:\n${existingQA.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
     : '';
 
-  return `You are an expert goal clarification assistant. The user has a goal they want to achieve. Your job is to ask clarifying questions to make the goal specific and actionable.
+  return `Role: Goal clarification assistant. ${GLOBAL_RULES}
 
-User's goal: "${goalText}"${qaHistory}
+Goal: "${goalText}"${qaHistory}
 
-Rules:
-- If the goal is already specific and actionable (e.g. "buy groceries", "write a function to sort a list"), immediately set isGoalClear to true with a goalSummary and NO questions.
-- Only ask questions when critical information is truly missing and would significantly change the plan.
-- For simple goals, ask 0 questions. For moderately complex goals, ask 1-2. For genuinely complex/ambiguous goals, ask 2-4 max.
-- Each question should target a specific ambiguity.
-- Provide options when helpful, but always allow free text.
-- Questions should be in the same language as the user's goal.
+If the goal is already specific and actionable, set isGoalClear=true with a goalSummary and empty questions. Otherwise ask only the questions where missing info would significantly change the plan — 0 for simple goals, 1-2 for moderate, 2-4 max for complex.
 
-Respond in this exact JSON format:
-{
-  "isGoalClear": boolean,
-  "goalSummary": "string (only if isGoalClear is true - a refined, clear version of the goal)",
-  "questions": [
-    {
-      "id": "q1",
-      "question": "string",
-      "type": "text" | "select" | "multi_select",
-      "options": ["option1", "option2"] // required for select and multi_select types
-    }
-  ]
-}
+${QUESTION_TYPE_GUIDE}
 
-Question type guide:
-- "text": open-ended, free-form answer
-- "select": exactly ONE option applies (e.g. preferred programming language, target platform)
-- "multi_select": MULTIPLE options can apply simultaneously (e.g. which features to include, which platforms to support, which skills to develop)
-
-If the goal is already clear enough, set isGoalClear to true and return an empty questions array with a goalSummary.`;
+{"isGoalClear":boolean,"goalSummary":"(only if clear)","questions":[{"id":"q1","question":"...","type":"text|select|multi_select","options":["..."]}]}`;
 }
 
 export function buildFeasibilityPrompt(goalText: string, clarifications: { question: string; answer: string }[]): string {
-  const qaText = clarifications.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n');
+  const qaText = clarifications.length > 0
+    ? clarifications.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')
+    : '(none)';
 
-  return `You are an expert feasibility analyst. Evaluate whether the following goal is feasible and identify key assumptions and risks.
+  return `Role: Feasibility analyst. ${GLOBAL_RULES}
 
 Goal: "${goalText}"
 
-Clarification details:
-${qaText}
+Clarifications:\n${qaText}
 
-Respond in this exact JSON format:
-{
-  "summary": "Brief feasibility assessment (2-3 sentences, in the same language as the goal)",
-  "level": "high" | "medium" | "low",
-  "assumptions": ["assumption1", "assumption2", ...],
-  "risks": ["risk1", "risk2", ...]
+Evaluate feasibility. Be realistic but constructive.
+
+{"summary":"2-3 sentence assessment","level":"high|medium|low","assumptions":["..."],"risks":["..."]}`;
 }
 
-Be realistic but constructive. Assumptions and risks should be in the same language as the goal.`;
+export function buildClarifyIteratePrompt(
+  goalText: string,
+  previousUnderstanding: string,
+  latestRoundQA: { question: string; answer: string }[]
+): string {
+  const qaText = latestRoundQA.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n');
+
+  return `Role: Goal analyst and clarification assistant. ${GLOBAL_RULES}
+
+Goal: "${goalText}"
+
+Current understanding:\n${previousUnderstanding}
+
+User just answered:\n${qaText}
+
+Do two things in one response:
+1. Update the understanding to incorporate the new answers. Fold answers into relevant blocks; remove resolved Open Questions.
+2. Decide if more clarification is needed. Only ask if there are remaining critical ambiguities that change the implementation path. At most 2 questions. If none remain, set isSufficient=true and nextQuestions=[].
+
+${QUESTION_TYPE_GUIDE}
+
+{"updatedUnderstanding":{"summary":"...","blocks":[{"title":"...","content":"..."}]},"isSufficient":boolean,"nextQuestions":[{"id":"q1","question":"...","type":"text|select|multi_select","options":["..."]}]}`;
 }
 
 export function buildStepsPrompt(
@@ -151,66 +117,93 @@ export function buildStepsPrompt(
   currentSteps?: { order: number; title: string; description: string }[] | null,
   stepClarifications?: { question: string; answer: string }[] | null,
 ): string {
-  const qaText = clarifications.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n');
+  const qaText = clarifications.length > 0
+    ? clarifications.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')
+    : '(none)';
 
   let parentInfo = '';
   if (parentContext && parentContext.length > 0) {
     const hierarchyLines = parentContext.map((ctx, i) => {
-      const levelLabel = i === 0 ? `[Level ${i + 1} - Root Goal]` : `[Level ${i + 1}]`;
-      return `${levelLabel} Goal: "${ctx.goalText}"\n  → Step being broken down: "${ctx.stepTitle}" — ${ctx.stepDescription}`;
+      const label = i === 0 ? `[Level ${i + 1} - Root]` : `[Level ${i + 1}]`;
+      return `${label} "${ctx.goalText}" → breaking down: "${ctx.stepTitle}" — ${ctx.stepDescription}`;
     });
-    parentInfo = `\n\nThis is a nested sub-task. Full goal hierarchy:\n\n${hierarchyLines.join('\n\n')}\n\n[Current Goal - Level ${parentContext.length + 1}]: "${goalText}"\n\nGenerate steps specifically for the current goal, keeping parent context in mind.\n`;
+    parentInfo = `\n\nNested sub-task. Hierarchy:\n${hierarchyLines.join('\n')}\n[Current - Level ${parentContext.length + 1}]: "${goalText}"\nGenerate steps for the current goal only, keeping parent context in mind.\n`;
   }
 
   const adjustmentInfo = adjustmentInstruction
-    ? `\n\nThe user wants to adjust the current steps:\n${(currentSteps || []).map((s, i) => `${i + 1}. ${s.title}: ${s.description}`).join('\n')}\n\nAdjustment request: "${adjustmentInstruction}"\nRegenerate steps incorporating the changes while keeping unchanged parts intact.`
+    ? `\n\nAdjust existing steps:\n${(currentSteps || []).map((s, i) => `${i + 1}. ${s.title}: ${s.description}`).join('\n')}\nRequest: "${adjustmentInstruction}"\nRegenerate incorporating changes; keep unchanged parts intact.`
     : '';
 
   const stepQaText = stepClarifications && stepClarifications.length > 0
-    ? `\n\nStep planning clarifications:\n${stepClarifications.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
+    ? `\n\nStep clarifications:\n${stepClarifications.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
     : '';
 
-  return `You are an expert task planner. Generate structured steps to achieve the following goal.${parentInfo}
+  return `Role: Task planner. ${GLOBAL_RULES}${parentInfo}
 
 Goal: "${goalText}"
 
-Clarification details:
-${qaText}${stepQaText}
-${feasibility ? `\nFeasibility: ${feasibility.summary}\nAssumptions: ${feasibility.assumptions.join(', ')}` : ''}${adjustmentInfo}
+Clarifications:\n${qaText}${stepQaText}
+${feasibility ? `Feasibility: ${feasibility.summary}\nAssumptions: ${feasibility.assumptions.join(', ')}` : ''}${adjustmentInfo}
 
-Rules:
-- First, assess if this is a SIMPLE or COMPLEX goal.
-- SIMPLE goal: 1-5 clear, directly executable steps. Output each step in detail.
-- COMPLEX goal: Output only a HIGH-LEVEL SKELETON of 3-7 major phases/milestones. Mark complex sub-goals with "isComplexSubGoal: true" - these can be recursively planned later. Do NOT expand complex sub-goals in detail.
-- Each step should be a logical, necessary milestone. Use the same language as the goal.
-- If anything is uncertain, mark it with "[Assumption: ...]" in the description.
-- Prioritize reliability over completeness - it is better to have fewer, solid steps than many uncertain ones.
+SIMPLE goal (clear, bounded): 1-5 detailed executable steps, "groups":[].
+COMPLEX goal (multi-phase): 3-7 high-level milestones; mark complex sub-goals with "isComplexSubGoal":true — do NOT expand them.
+Mark uncertain items "[Assumption: ...]". Fewer solid steps > many uncertain ones.
 
-Step fields:
-- "type": "research" | "decision" | "action" | "creation"
-- "executable": true if an AI agent could fully execute this step; false if it requires human judgment.
-- "blocked_by": array of step order numbers (integers) within the SAME group. Use [] if no intra-group dependency.
-- "reason_if_not_executable": brief explanation when executable is false.
-- "tool_hint": suggested tool when executable is true (e.g. "web_search", "code_generation").
-- "isComplexSubGoal": true if this step is itself a complex sub-goal that warrants its own planning session.
+Step fields (omit empty optionals): type("research"|"decision"|"action"|"creation"), executable(bool), blocked_by([order ints, intra-group only]), reason_if_not_executable, tool_hint, isComplexSubGoal.
+Grouping: simple→"groups":[], no "group" on steps. Complex→groups with snake_case id, title, order, blocked_by(inter-group).
 
-Grouping:
-- For simple goals (2-4 linear steps), set "groups" to [] and omit "group" from steps.
-- For complex goals (5+ steps with parallel tracks), organize steps into groups (phases/modules).
-- Each group has "id" (snake_case), "title", optional "description", "order", and "blocked_by" (array of other group order numbers).
-- Group "blocked_by" expresses inter-phase dependencies. Groups with no dependency can execute in parallel.
-- Step "blocked_by" is ONLY for intra-group ordering. Do NOT reference steps from other groups.
+{"groups":[{"id":"g1","title":"...","order":0,"blocked_by":[]}],"steps":[{"order":0,"title":"...","description":"...","type":"action","executable":true,"blocked_by":[],"group":"g1"}]}`;
+}
 
-CRITICAL: Output ONLY valid JSON.
+export function buildAdjustGoalPrompt(
+  goalText: string,
+  clarifications: { question: string; answer: string }[],
+  userRequest: string,
+  adjustmentQA: { question: string; answer: string }[]
+): string {
+  const clarifyHistory = clarifications.length > 0
+    ? `\n\nInitial clarifications:\n${clarifications.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
+    : '';
 
-{
-  "groups": [
-    { "id": "group_id", "title": "Group title", "description": "...", "order": 0, "blocked_by": [] }
-  ],
-  "steps": [
-    { "order": 0, "title": "Step title", "description": "...", "type": "action", "executable": true, "blocked_by": [], "reason_if_not_executable": "", "tool_hint": "", "group": "group_id", "isComplexSubGoal": false }
-  ]
-}`;
+  const adjustHistory = adjustmentQA.length > 0
+    ? `\n\nFollow-up Q&A:\n${adjustmentQA.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
+    : '';
+
+  return `Role: Goal refinement assistant. ${GLOBAL_RULES}
+
+Goal: "${goalText}"${clarifyHistory}
+
+Adjustment request: "${userRequest}"${adjustHistory}
+
+If you have enough info, produce an updated goal incorporating the request. Preserve unchanged parts. If ambiguous, ask 1-3 targeted follow-up questions.
+
+${QUESTION_TYPE_GUIDE}
+
+{"needsClarification":boolean,"questions":[{"id":"aq1","question":"...","type":"text|select|multi_select","options":["..."]}],"updatedGoalText":"(if not clarifying)","goalSummary":"(≤50 chars, if not clarifying)"}`;
+}
+
+export function buildFreeChatPrompt(
+  goalText: string,
+  aiUnderstanding: string | null,
+  messages: { role: 'user' | 'assistant'; content: string }[]
+): string {
+  const understandingContext = aiUnderstanding
+    ? `\n\nCurrent understanding:\n${aiUnderstanding}`
+    : '';
+
+  const conversationHistory = messages
+    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+    .join('\n\n');
+
+  return `Role: Goal clarification assistant. Respond in the same language as the user. Be concise but thorough.
+
+Goal being clarified: "${goalText}"${understandingContext}
+
+Answer questions honestly and helpfully. Stay focused on goal clarification. Gently note if the user drifts far off-topic. Do NOT modify the left-panel understanding — the user does that manually.
+
+${conversationHistory}
+
+Respond to the user's latest message.`;
 }
 
 export type ClarifyResponse = {
@@ -226,55 +219,11 @@ export type AdjustGoalResponse = {
   goalSummary?: string;
 };
 
-export function buildAdjustGoalPrompt(
-  goalText: string,
-  clarifications: { question: string; answer: string }[],
-  userRequest: string,
-  adjustmentQA: { question: string; answer: string }[]
-): string {
-  const clarifyHistory = clarifications.length > 0
-    ? `\n\nInitial clarification Q&A:\n${clarifications.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
-    : '';
-
-  const adjustHistory = adjustmentQA.length > 0
-    ? `\n\nFollow-up Q&A during adjustment:\n${adjustmentQA.map((qa, i) => `Q${i + 1}: ${qa.question}\nA${i + 1}: ${qa.answer}`).join('\n\n')}`
-    : '';
-
-  return `You are an expert goal refinement assistant. The user has a well-clarified goal and wants to adjust it based on their feedback.
-
-Current goal: "${goalText}"${clarifyHistory}
-
-User's adjustment request: "${userRequest}"${adjustHistory}
-
-Your task:
-- If you have enough information to update the goal, produce an updated version that incorporates the user's adjustment.
-- If the adjustment request is ambiguous or requires more information, ask 1-3 targeted follow-up questions using the same option-based format.
-- Keep the updated goal specific, actionable, and in the same language as the original goal.
-- Preserve all parts of the original goal that the user did NOT ask to change.
-
-Respond in this exact JSON format:
-{
-  "needsClarification": boolean,
-  "questions": [
-    {
-      "id": "aq1",
-      "question": "string",
-      "type": "text" | "select" | "multi_select",
-      "options": ["option1", "option2"] // required for select and multi_select types
-    }
-  ],
-  "updatedGoalText": "string (only if needsClarification is false - the full updated goal)",
-  "goalSummary": "string (only if needsClarification is false - a short title, max 50 chars)"
-}
-
-Question type guide:
-- "text": open-ended, free-form answer
-- "select": exactly ONE option applies
-- "multi_select": MULTIPLE options can apply simultaneously
-
-If needsClarification is false, set questions to [] and provide updatedGoalText and goalSummary.
-If needsClarification is true, set questions to the follow-up questions and omit updatedGoalText and goalSummary.`;
-}
+export type ClarifyIterateResponse = {
+  updatedUnderstanding: { summary: string; blocks: { title: string; content: string }[] };
+  isSufficient: boolean;
+  nextQuestions: ClarifyQuestion[];
+};
 
 export type FeasibilityResponse = Omit<Feasibility, 'id' | 'goalId' | 'userConfirmed'>;
 

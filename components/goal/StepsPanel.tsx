@@ -18,6 +18,8 @@ import { useSettingsStore } from '@/lib/store/settingsStore';
 import { useI18n } from '@/lib/i18n';
 import { buildExportJson, downloadJson } from '@/lib/export';
 import { toast } from 'sonner';
+import { readStreamingJson } from '@/lib/ai/streamJson';
+import type { StepsResponse } from '@/lib/ai/prompts';
 
 interface StepsPanelProps {
   goalText: string;
@@ -119,6 +121,7 @@ export function StepsPanel({
           baseURL: config.baseURL,
           apiKey: config.apiKey,
           model: config.model,
+          enablePromptCaching: config.enablePromptCaching,
         }),
       });
 
@@ -127,7 +130,9 @@ export function StepsPanel({
         throw new Error(err.error || 'Request failed');
       }
 
-      const data = await res.json();
+      const data = await readStreamingJson<StepsResponse>(res, () => {
+        // Steps panel doesn't render partial steps (complex), just wait for full response
+      });
 
       if (data.steps?.length > 0) {
         await onStepsGenerated(data.steps, data.groups);
@@ -192,6 +197,7 @@ export function StepsPanel({
           baseURL: config.baseURL,
           apiKey: config.apiKey,
           model: config.model,
+          enablePromptCaching: config.enablePromptCaching,
         }),
       });
 
@@ -200,7 +206,7 @@ export function StepsPanel({
         throw new Error(err.error || 'Request failed');
       }
 
-      const data = await res.json();
+      const data = await readStreamingJson<StepsResponse>(res, () => {});
       if (data.steps?.length > 0) {
         setPendingData({ steps: data.steps, groups: data.groups });
       }

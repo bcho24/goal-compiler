@@ -5,7 +5,7 @@ import type { CompatType } from '@/lib/types';
 
 export async function POST(req: NextRequest) {
   try {
-    const { goalText, existingQA, aiUnderstanding, mode, compatType, baseURL, apiKey, model } = await req.json();
+    const { goalText, existingQA, aiUnderstanding, mode, compatType, baseURL, apiKey, model, enablePromptCaching } = await req.json();
 
     if (!apiKey) {
       return NextResponse.json({ error: 'API key not configured / API Key 未配置' }, { status: 400 });
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
       : buildClarifyPrompt(goalText, existingQA || []);
 
     const text = await callAI(
-      { compatType: compatType as CompatType, baseURL, apiKey, model, temperature: 0.7 },
+      { compatType: compatType as CompatType, baseURL, apiKey, model, temperature: 0.7, maxTokens: 500, prefill: '{', enableCache: enablePromptCaching },
       prompt
     );
 

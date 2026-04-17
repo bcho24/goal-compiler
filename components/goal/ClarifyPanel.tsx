@@ -71,6 +71,7 @@ export function ClarifyPanel({
           baseURL: config.baseURL,
           apiKey: config.apiKey,
           model: config.model,
+          enablePromptCaching: config.enablePromptCaching,
         }),
       });
 

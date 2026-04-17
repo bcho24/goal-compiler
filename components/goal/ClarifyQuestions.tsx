@@ -56,6 +56,7 @@ export function ClarifyQuestions({
           baseURL: config.baseURL,
           apiKey: config.apiKey,
           model: config.model,
+          enablePromptCaching: config.enablePromptCaching,
         }),
       });
       if (!res.ok) {
@@ -106,6 +107,7 @@ export function ClarifyQuestions({
       }
     }
 
+    // Keep full history for UI reference only
     const newAccumulatedQA = [...accumulatedQA, ...resolved];
     setAccumulatedQA(newAccumulatedQA);
 
@@ -116,39 +118,49 @@ export function ClarifyQuestions({
     setMultiCustomTexts({});
     setQuestions([]);
 
-    // 调用 understand API 更新理解
+    // 合并调用：clarify-iterate 一次 API 同时更新理解 + 获取下一轮问题
     setLoading(true);
-    setLoadingMessage('AI 正在更新理解...');
+    setLoadingMessage('AI 正在更新理解并生成下一轮问题...');
     try {
-      const res = await fetch('/api/ai/understand', {
+      const res = await fetch('/api/ai/clarify-iterate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           goalText,
           previousUnderstanding: aiUnderstanding,
-          accumulatedQA: newAccumulatedQA,
+          latestRoundQA: resolved,
           compatType: config.compatType,
           baseURL: config.baseURL,
           apiKey: config.apiKey,
           model: config.model,
+          enablePromptCaching: config.enablePromptCaching,
         }),
       });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.error || 'Failed to update understanding');
+        throw new Error(err.error || 'Failed to iterate clarification');
       }
       const data = await res.json();
-      const blocks: { title: string; content: string }[] = data.blocks || [];
-      const newUnderstanding = `${data.summary || ''}\n\n${blocks.map((b: { title: string; content: string }) => `## ${b.title}\n${b.content}`).join('\n\n')}`.trim();
 
-      onUnderstandingUpdated(newUnderstanding);
+      // 更新理解
+      const updatedUnd = data.updatedUnderstanding;
+      if (updatedUnd) {
+        const blocks: { title: string; content: string }[] = updatedUnd.blocks || [];
+        const newUnderstanding = `${updatedUnd.summary || ''}\n\n${blocks.map((b: { title: string; content: string }) => `## ${b.title}\n${b.content}`).join('\n\n')}`.trim();
+        onUnderstandingUpdated(newUnderstanding);
+      }
 
-      // 进入下一轮，继续检查是否有新问题
-      setRound((r) => r + 1);
-      await fetchQuestions(newUnderstanding, newAccumulatedQA);
+      // 判断终止条件
+      if (data.isSufficient || !data.nextQuestions || data.nextQuestions.length === 0) {
+        setIsSufficient(true);
+      } else {
+        setRound((r) => r + 1);
+        setQuestions(data.nextQuestions);
+      }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Unknown error';
-      toast.error(`更新理解失败: ${message}`);
+      toast.error(`澄清迭代失败: ${message}`);
+    } finally {
       setLoading(false);
     }
   };

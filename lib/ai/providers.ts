@@ -60,20 +60,35 @@ export interface CallAIParams {
   apiKey: string;
   model: string;
   temperature?: number;
+  maxTokens?: number;
+  /** For Anthropic: prefill the assistant turn (e.g. '{') to skip preamble */
+  prefill?: string;
+  /**
+   * Enable Anthropic prompt caching. When true, the static portion of the prompt
+   * (everything except dynamic user data) is sent with cache_control to reduce TTFT.
+   * Only works with official Anthropic API — disable for third-party endpoints.
+   */
+  enableCache?: boolean;
+  /**
+   * Split point index in the prompt string. Characters [0..staticEnd] are treated
+   * as the static (cacheable) portion; the rest is dynamic.
+   * If omitted, the first 80% of the prompt is treated as static.
+   */
+  staticEnd?: number;
 }
 
 export async function callAI(params: CallAIParams, prompt: string): Promise<string> {
-  const { compatType, baseURL, apiKey, model, temperature = 0.7 } = params;
+  const { compatType, baseURL, apiKey, model, temperature = 0.7, maxTokens, prefill, enableCache, staticEnd } = params;
 
   if (compatType === 'anthropic') {
-    return callAnthropic({ baseURL, apiKey, model, temperature }, prompt);
+    return callAnthropic({ baseURL, apiKey, model, temperature, maxTokens, prefill, enableCache, staticEnd }, prompt);
   }
 
-  return callOpenAICompat({ baseURL, apiKey, model, temperature }, prompt);
+  return callOpenAICompat({ baseURL, apiKey, model, temperature, maxTokens }, prompt);
 }
 
 async function callAnthropic(
-  params: { baseURL: string; apiKey: string; model: string; temperature: number },
+  params: { baseURL: string; apiKey: string; model: string; temperature: number; maxTokens?: number; prefill?: string; enableCache?: boolean; staticEnd?: number },
   prompt: string
 ): Promise<string> {
   const client = new Anthropic({
@@ -81,46 +96,65 @@ async function callAnthropic(
     baseURL: params.baseURL || undefined,
   });
 
+  // Build user content — optionally split into cacheable static + dynamic segments
+  let userContent: Anthropic.Messages.MessageParam['content'];
+  if (params.enableCache) {
+    const splitAt = params.staticEnd ?? Math.floor(prompt.length * 0.8);
+    const staticPart = prompt.slice(0, splitAt);
+    const dynamicPart = prompt.slice(splitAt);
+    userContent = [
+      { type: 'text', text: staticPart, cache_control: { type: 'ephemeral' } } as Anthropic.Messages.TextBlockParam & { cache_control: { type: 'ephemeral' } },
+      ...(dynamicPart ? [{ type: 'text' as const, text: dynamicPart }] : []),
+    ];
+  } else {
+    userContent = prompt;
+  }
+
+  const msgs: Anthropic.Messages.MessageParam[] = [{ role: 'user', content: userContent }];
+  if (params.prefill) {
+    msgs.push({ role: 'assistant', content: params.prefill });
+  }
+
   const response = await client.messages.create({
     model: params.model,
-    max_tokens: 4096,
+    max_tokens: params.maxTokens ?? 4096,
     temperature: params.temperature,
-    messages: [{ role: 'user', content: prompt }],
+    messages: msgs,
   });
 
-  console.log('[Anthropic-compat] Raw response:', JSON.stringify(response, null, 2));
-
+  let text = '';
   if (response.content && Array.isArray(response.content)) {
     for (const block of response.content) {
       if (block.type === 'text' && block.text) {
-        return block.text;
+        text = block.text;
+        break;
       }
     }
-    // Some providers return content blocks without a type field
-    const firstBlock = response.content[0];
-    if (typeof firstBlock === 'string') {
-      return firstBlock;
-    }
-    if (firstBlock && typeof firstBlock === 'object' && 'text' in firstBlock) {
-      return (firstBlock as { text: string }).text;
+    if (!text) {
+      const firstBlock = response.content[0];
+      if (typeof firstBlock === 'string') {
+        text = firstBlock;
+      } else if (firstBlock && typeof firstBlock === 'object' && 'text' in firstBlock) {
+        text = (firstBlock as { text: string }).text;
+      }
     }
   }
 
-  // Fallback: try common alternative response shapes
-  const raw = response as unknown as Record<string, unknown>;
-  if (typeof raw.content === 'string') {
-    return raw.content;
-  }
-  if (raw.completion && typeof raw.completion === 'string') {
-    return raw.completion;
+  if (!text) {
+    const raw = response as unknown as Record<string, unknown>;
+    if (typeof raw.content === 'string') text = raw.content;
+    else if (raw.completion && typeof raw.completion === 'string') text = raw.completion;
   }
 
-  console.error('[Anthropic-compat] Cannot extract text from response:', JSON.stringify(response));
-  throw new Error('Cannot extract text from Anthropic-compatible API response');
+  if (!text) {
+    throw new Error('Cannot extract text from Anthropic-compatible API response');
+  }
+
+  return params.prefill ? params.prefill + text : text;
 }
 
 async function callOpenAICompat(
-  params: { baseURL: string; apiKey: string; model: string; temperature: number },
+  params: { baseURL: string; apiKey: string; model: string; temperature: number; maxTokens?: number },
   prompt: string
 ): Promise<string> {
   const openai = createOpenAI({

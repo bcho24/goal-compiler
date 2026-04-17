@@ -58,6 +58,7 @@ export function FreeChatPanel({ goalText, aiUnderstanding, isVisible }: FreeChat
           baseURL: config.baseURL,
           apiKey: config.apiKey,
           model: config.model,
+          enablePromptCaching: config.enablePromptCaching,
         }),
       });
 

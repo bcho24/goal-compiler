@@ -70,6 +70,7 @@ export function FeasibilityPanel({
           baseURL: config.baseURL,
           apiKey: config.apiKey,
           model: config.model,
+          enablePromptCaching: config.enablePromptCaching,
         }),
       });
 

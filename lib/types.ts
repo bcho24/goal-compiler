@@ -120,6 +120,8 @@ export interface AIConfig {
   model: string;
   baseURL: string;
   compatType: CompatType;
+  /** Enable Anthropic prompt caching for static prompt segments (official API only) */
+  enablePromptCaching?: boolean;
 }
 
 export interface ProviderPreset {

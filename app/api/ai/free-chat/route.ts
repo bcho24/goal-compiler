@@ -3,36 +3,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { streamText } from 'ai';
 import Anthropic from '@anthropic-ai/sdk';
 import type { CompatType } from '@/lib/types';
-
-function buildFreeChatPrompt(
-  goalText: string,
-  aiUnderstanding: string | null,
-  messages: { role: 'user' | 'assistant'; content: string }[]
-): string {
-  const understandingContext = aiUnderstanding
-    ? `\n\nCurrent AI understanding of the goal:\n${aiUnderstanding}`
-    : '';
-
-  const conversationHistory = messages
-    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-    .join('\n\n');
-
-  return `You are a helpful assistant supporting a user who is currently in the "goal clarification" stage of a goal-planning process.
-
-Current goal being clarified: "${goalText}"${understandingContext}
-
-Your role:
-- Answer the user's questions honestly and helpfully
-- Keep responses focused and relevant to the goal clarification context
-- Gently remind the user if they are drifting far from goal clarification
-- Do NOT automatically modify the left-side goal understanding - the user must do that manually
-- Be concise but thorough
-
-Conversation so far:
-${conversationHistory}
-
-Respond to the user's latest message. Use the same language as the user.`;
-}
+import { buildFreeChatPrompt } from '@/lib/ai/prompts';
 
 export async function POST(req: NextRequest) {
   try {
@@ -52,7 +23,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const prompt = buildFreeChatPrompt(goalText, aiUnderstanding, messages);
+    const recentMessages = messages.slice(-10);
+    const prompt = buildFreeChatPrompt(goalText, aiUnderstanding, recentMessages);
 
     if ((compatType as CompatType) === 'anthropic') {
       // Anthropic-compat: use @anthropic-ai/sdk streaming
@@ -63,7 +35,7 @@ export async function POST(req: NextRequest) {
 
       const stream = client.messages.stream({
         model,
-        max_tokens: 4096,
+        max_tokens: 1024,
         messages: [{ role: 'user', content: prompt }],
       });
 
